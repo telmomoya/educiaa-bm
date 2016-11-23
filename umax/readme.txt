@@ -1,4 +1,4 @@
-#EDU-CIAA Chess
+# EDU-CIAA Chess
 La EDU-CIAA juega ajedrez por el puerto serie
 usando el motor de ajedrez micromax* y firmware bare-metal del proyecto CIAA**
 
