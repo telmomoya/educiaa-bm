@@ -127,7 +127,7 @@
 #define J(A) K(ToSqr+A,Board[ToSqr])-K(FromSqr+A,Piece)-K(CaptSqr+A,Victim)
 
 //#define HASHSIZE 16777224
-#define HASHSIZE 0xa00
+#define HASHSIZE 0xa08
 //#define HASHSIZE (1<<5)
 struct _
 { int16_t  Key, Score;
@@ -417,9 +417,9 @@ int main(void)
 	  Side^=24;                                            /* check legality & do*/
 
   writeByte_UART_USB_EDUCIAA('a'+InputFrom%16);
-  writeByte_UART_USB_EDUCIAA('1'+InputFrom/16);
+  writeByte_UART_USB_EDUCIAA('8'-InputFrom/16);
   writeByte_UART_USB_EDUCIAA('a'+InputTo%16);
-  writeByte_UART_USB_EDUCIAA('1'+InputTo/16);
+  writeByte_UART_USB_EDUCIAA('8'-InputTo/16);
 
   writeByte_UART_USB_EDUCIAA(0xa);
   writeByte_UART_USB_EDUCIAA(0xa);
