@@ -1,29 +1,20 @@
-# EDU-CIAA Chess
-La EDU-CIAA juega ajedrez por el puerto serie
-usando el motor de ajedrez micromax* y firmware bare-metal del proyecto CIAA**
+EDU-CIAA Chess
+=============
 
-Para jugar ingresa tu movimiento en notación algebraica, por ejemplo: e2e4
+La EDU-CIAA juega ajedrez por el puerto serie usando el motor de ajedrez [micromax](http://home.hccnet.nl/h.g.muller/max-src2.html) y firmware bare-metal del [proyecto CIAA](https://github.com/ciaa/Firmware)
+
+```
+Jugás con las blancas, ingresá tus movimientos en notación algebraica, por ejemplo: e2e4
 
 8  r n b q k b n r
-
 7  + + + + + + + +
-
 6  . . . . . . . .
-
 5  . . . . . . . .
-
 4  . . . . . . . .
-
 3  . . . . . . . .
-
 2  * * * * * * * *
+1  R N B Q K B N R 
 
-1  R N B Q K B N R
- 
- 
    a b c d e f g h
-   
-   
-*  http://home.hccnet.nl/h.g.muller/max-src2.html
 
-** https://github.com/ciaa/Firmware
+```
