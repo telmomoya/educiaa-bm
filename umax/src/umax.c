@@ -1,9 +1,4 @@
-
-/* EDU-CIAA Chess powered by CIAA Firmware & micro-Max chess engine
- * Using maxi-Max engine version  http://home.hccnet.nl/h.g.muller/maximax.txt
- * for better code readability, but seems worst game
- * Copyright 2016  Telmo Moya
- * Copyright 2014, 2015 Mariano Cerdeiro
+/* Copyright 2014, 2015 Mariano Cerdeiro
  * Copyright 2014, Pablo Ridolfi
  * Copyright 2014, Juan Cecconi
  * Copyright 2014, Gustavo Muro
@@ -99,332 +94,264 @@
  *          warnings or errors.
  */
 
+
+/*               http://www.andreadrian.de/schach/avr_umax.c               */
 /***************************************************************************/
 /*                               micro-Max,                                */
 /* A chess program smaller than 2KB (of non-blank source), by H.G. Muller  */
+/* Port to Atmel ATMega644 and AVR GCC, by Andre Adrian                    */
+/* Port to ARM Cortex M4 EDUCIAA, by Telmo Moya                             */
 /***************************************************************************/
-/* version 3.2 (2000 characters) features:                                 */
+/* version 4.8 (1953 characters) features:                                 */
 /* - recursive negamax search                                              */
-/* - quiescence search with recaptures                                     */
-/* - recapture extensions                                                  */
+/* - all-capture MVV/LVA quiescence search                                 */
 /* - (internal) iterative deepening                                        */
 /* - best-move-first 'sorting'                                             */
 /* - a hash table storing score and best move                              */
+/* - futility pruning                                                      */
+/* - king safety through magnetic, frozen king in middle-game              */
+/* - R=2 null-move pruning                                                 */
+/* - keep hash and repetition-draw detection                               */
+/* - better defense against passers through gradual promotion              */
+/* - extend check evasions in inner nodes                                  */
+/* - reduction of all non-Pawn, non-capture moves except hash move (LMR)   */
 /* - full FIDE rules (expt under-promotion) and move-legality checking     */
 
-/* This version is for reference only, with all variable names changed to  */
-/* be more indicative of their meaning, and better layout & more comments. */
-/* There is no guarantee, though, that it still compiles or runs.          */
+/* 26nov2008 no hash table                                                 */
+/* 29nov2008 all IO via myputchar(), mygetchar(), pseudo random generator  */
 
-#include <stdio.h>
-//#include <math.h>
-#define NODE_LIMIT	1e5				// Game Level
+/* 29nov2016 avoid #define W while                                         */
+
+//#define UNIX
+#define EDUCIAA
+#define VERBOSE
+#define ENTERKEY	0x0d		// Terminal Enter key
+#define STRENGTH    10000		// Nivel de juego CPU (por profundidad y no por tiempo)
+
+#ifdef UNIX
+  #include <stdio.h>
+  #include <time.h>
+#endif
 
 
-#define F(I,S,N) for(I=S;I<N;I++)
-#define W(A) while(A)
-#define K(A,B) *(int*)(Zobrist+A+(B&8)+S*(B&7))
-#define J(A) K(ToSqr+A,Board[ToSqr])-K(FromSqr+A,Piece)-K(CaptSqr+A,Victim)
+#define WHITE 16
+#define BLACK  8
 
-//#define HASHSIZE 16777224
-#define HASHSIZE 0xa08
-//#define HASHSIZE (1<<5)
-struct _
-{ int16_t  Key, Score;
-  char From, To, Draft;
-} HashTab[HASHSIZE];                                   /* hash table, 16M+8 entries*/
+#define M 0x88
+#define S 128
+#define I 8000
 
-int32_t V=112, M=136, S=128, INF=8e3, C=799,               /* V=0x70=rank mask, M=0x88 */
-    Rootep, Nodes, i;
+long N, T;    		                                  /* N=evaluated positions+S, T=recursion limit */
+short Q,O,K,R,k=WHITE,last_side=BLACK;                /* k=moving side */
+char *p,c[5],Z;   									  /* p=pointer to c, c=user input, computer output, Z=recursion counter */
 
-char RootEval, InputFrom, InputTo,
-PieceVal[] = {0,1,1,3,-1,3,5,9},                       /* relative piece values    */
-StepVecs[] =                                           /* step-vector lists        */
-         {-16,-15,-17,0,                               /* white Pawn               */
-           1,16,0,                                     /* Rook                     */
-           1,16,15,17,0,                               /* Q,K, also used for B, bP */
-          14,18,31,33,0,                               /* Knight                   */
-          7,-1,11,6,8,3,6,                             /* first direction per piece*/
-          6,3,5,7,4,5,3,6},                            /* initial piece setup      */
-Board[129],                                            /* board: half of 16x8+dummy*/
-Zobrist[1035],                                         /* hash translation table   */
+char L,
+w[]={0,2,2,7,-1,8,12,23},		                      /* relative piece values    */
+o[]={-16,-15,-17,0,1,16,0,1,16,15,17,0,14,18,31,33,0, /* step-vector lists */
+     7,-1,11,6,8,3,6,           		              /* 1st dir. in o[] per piece*/
+     6,3,5,7,4,5,3,6},                  		      /* initial piece setup      */
+b[]={  												  /* board is left part, center-pts table is right part, and dummy */
+  22, 19, 21, 23, 20, 21, 19, 22, 28, 21, 16, 13, 12, 13, 16, 21,
+  18, 18, 18, 18, 18, 18, 18, 18, 22, 15, 10,  7,  6,  7, 10, 15,
+   0,  0,  0,  0,  0,  0,  0,  0, 18, 11,  6,  3,  2,  3,  6, 11,
+   0,  0,  0,  0,  0,  0,  0,  0, 16,  9,  4,  1,  0,  1,  4,  9,
+   0,  0,  0,  0,  0,  0,  0,  0, 16,  9,  4,  1,  0,  1,  4,  9,
+   0,  0,  0,  0,  0,  0,  0,  0, 18, 11,  6,  3,  2,  3,  6, 11,
+   9,  9,  9,  9,  9,  9,  9,  9, 22, 15, 10,  7,  6,  7, 10, 15,
+  14, 11, 13, 15, 12, 13, 11, 14, 28, 21, 16, 13, 12, 13, 16, 21, 0
+};
 
-Sym[] = ".?+nkbrq?*?NKBRQ";                            /* piece symbols on printout*/
+volatile char breakpoint; /* for debugger */
 
-int Search(int Side, int Alpha, int Beta, int Eval, int HashKeyLo, int HashKeyHi,
-                                                    int epSqr, int LastTo, int Depth)
+/* User interface routines */
+void myputchar(char c) {
+#ifdef UNIX
+  putchar(c);
+#endif
+#ifdef EDUCIAA
+  writeByte_UART_USB_EDUCIAA(c);
+#endif
+}
+
+void myputs(const char *s) {
+  while(*s) myputchar(*s++);
+}
+
+char mygetchar(void) {
+#ifdef VERBOSE
+	#ifdef EDUCIAA
+      while(readByte_UART_USB_EDUCIAA()!=0);	/* Vaciar buffer entrada UART		 */
+	  unsigned char serial_in=0;
+	  do
+	  	   {
+		   serial_in=readByte_UART_USB_EDUCIAA();
+		   myputchar (serial_in);
+	  	   }
+	  while(serial_in==0);						/* Espera un byte!=0 por puerto serie*/
+	  return serial_in;
+	#else
+	  return getchar();
+	#endif
+#else
+  return ENTERKEY;                          	/* self play						*/
+#endif
+}
+
+/* 16bit pseudo random generator */
+#define MYRAND_MAX 65535
+
+unsigned short r = 1;                       	/* pseudo random generator seed */
+
+void mysrand(unsigned short r_) {
+ r = r_;
+}
+
+unsigned short myrand(void) {
+ return r=((r<<11)+(r<<7)+r)>>1;
+}
+
+short D(q,l,e,E,z,n)        	                /* recursive minimax search */
+short q,l,e;  				                    /* (q,l)=window, e=current eval. score, */
+unsigned char E,z,n;     						/* E=e.p. sqr.z=prev.dest, n=depth; return score */
 {
-  int j, StepVec, BestScore, Score, IterDepth, h, i=8, SkipSqr, RookSqr;
-  char Victim, PieceType, Piece, FromSqr, ToSqr, BestFrom, BestTo, CaptSqr, StartSqr;
-  struct _*Hash = HashTab;
+ short m,v,i,P,V,s;
+ unsigned char t,p,u,x,y,X,Y,H,B,j,d,h,F,G,C;
+ signed char r;
 
-  /* Hash probe. On miss (Internal) Iterative Deepening starts at IterDepth=0,     */
-  /* without move hint. On a hit we start IID from the hashed values, except       */
-  /* when the depth is already sufficient. In this case, if the bound type OK,     */
-  /* we use the hashed score immediately, and otherwise we just do the last        */
-  /* iteration starting with the hash move.                                        */
-                                                       /* lookup pos. in hash table*/
-  j = (Side*epSqr^HashKeyLo) & HASHSIZE-9;             /* try 8 consec. locations  */
-  while((h=HashTab[++j].Key) && h-HashKeyHi && --i);   /* first empty or match     */
-  Hash += i ? j : 0;                                   /* dummy A[0] if miss & full*/
-  if(Hash->Key)                                        /* hit: pos. is in hash tab */
-  { IterDepth = Hash->Draft;
-    Score     = Hash->Score;
-    BestFrom  = Hash->From;                            /* examine stored data      */
-    if(IterDepth >= Depth)                             /* if depth sufficient:     */
-    { if(Score >=  Beta|BestFrom&S &&
-         Score <= Alpha|BestFrom&8
-        ) return Score;                                /* use if window compatible */
-      IterDepth = Depth-1;                             /* or use as iter. start    */
-    }
-    BestFrom &= ~0x88;
-    BestTo    = Hash->To;                              /*      with best-move hint */
-    BestTo    = IterDepth ? BestTo : 0;                /* don't try best at d=0    */
-  } else IterDepth = BestFrom = BestTo = 0;            /* start iter., no best yet */
+#ifndef EDUCIAA
+ if (++Z>30) {                                  /* stack underrun check */
+  breakpoint=1;             					/* AVR Studio 4 Breakpoint for stack underrun */
+  myputchar('u');
+  --Z;return e;
+ }
+#endif
 
-  Nodes++;                                             /* node count (for timing)  */
-
-  /* We have to search the current node; deepen the search in steps of one         */
-  /* starting from the hashed data as if it were the previous iteration.           */
-  /* In the root (LastTo==8) we deepen until node count or max. depth reached.     */
-
-  while(IterDepth++ < Depth |                          /* iterative deepening loop */
-       LastTo==8 & Nodes< NODE_LIMIT & IterDepth<98)   /* at root until node limit */
-  { /* Each iteration consist of a move-generation run, immediately searching      */
-    /* all moves as they are generated. The best move from the previous iter-      */
-    /* ation (still contained in BestFrom, BestTo) is slipped in front, though.    */
-    /* To make this easier, move generation starts at StartSqr = BestFrom.         */
-    /* The S-bit of BestTo indicates if there is a valid best move to try.         */
-    FromSqr = StartSqr = BestFrom;                    /* start scan at prev. best  */
-    ToSqr  |= 8 & ToSqr>>4;                            /* request try noncastl. 1st*/
-    BestScore = IterDepth>1 ? -INF : Eval;             /* unconsidered:static eval */
-    do
-    { Piece = Board[FromSqr];                          /* scan board looking for   */
-      if(Piece & Side)                                 /*  own piece (inefficient!)*/
-      { StepVec = PieceType = Piece&7;                 /* set StepVec > 0          */
-        j = StepVecs[PieceType+16];                    /* first step vector Piece  */
-        while(StepVec = PieceType>2&StepVec<0 ? -StepVec : -StepVecs[++j])
-                                                       /* loop over directions o[] */
-        {replay:                                       /* resume normal after best */
-          /* For each direction we scan ToSqr along the ray startig at FromSqr.    */
-          ToSqr   = FromSqr;
-          SkipSqr = RookSqr = S;                       /* S = 0x80 = dummy square  */
-          do
-          { CaptSqr = ToSqr += StepVec;                /* ToSqr traverses ray      */
-
-            /* FromSqr, ToSqr here scan through all tentative moves. If there      */
-            /* is an old best move to try first, this is indicated in the 8-bit    */
-            /* of BestTo (which was copied from the S-bit), and we overrule the    */
-            /* generated ToSqr (which might ly at other distance or in direction)  */
-            /* We then test if ToSqr is on the board, if we have an e.p. capture,  */
-            /* are blocked by an own piece, and if Pawn moves are valid.           */
-            if(BestTo & 8)
-              CaptSqr = ToSqr = BestTo&~0x88;          /* sneak-in prev. best move */
-            if(ToSqr & 0x88) break;                    /* board edge hit (M=0x88)  */
-            if(PieceType<3 & ToSqr==epSqr)
-              CaptSqr = ToSqr^16;                      /* shift CaptSqr if e.p.    */
-            Victim = Board[CaptSqr];
-            if(Victim & Side |                         /* capture own              */
-               PieceType<3 & !(StepVec&7) != !Victim   /*            bad pawn mode */
-              ) break;
-
-            /* If we get here, we have a pseudo-legal move in (FromSqr, ToSqr).    */
-            /* We check it for King capture (or Rook capture after castling).      */
-            /* This can give a beta cutoff, as can the stand-pat score in QS.      */
-            i = 99*PieceVal[Victim&7];                 /* value of victim piece    */
-            if(i<0 ||                                  /* K capt. or               */
-                      epSqr-S && Board[epSqr] &&       /* non-empty epSqr:castling */
-                      ToSqr-epSqr<2 & epSqr-ToSqr<2    /*             bad castling */
-              ) BestScore = INF;
-            if(BestScore >= Beta) goto cutoff;         /* abort on fail high       */
-
-            /* We now have a move to search. If there is depth left, we different- */
-            /* ially update the evaluation, Make the move, Search it recursively   */
-            /* UnMake it, and update the best score & move. If not, we ignore it.  */
-            if(h = IterDepth - (ToSqr!=LastTo))        /* remaining depth(-recapt.)*/
-            { Score = PieceType<6 ? Board[FromSqr+8]-Board[ToSqr+8] : 0;
-                                                       /* center positional pts.   */
-
-              /* Make move & evaluate                                              */
-              Board[RookSqr] = Board[CaptSqr] = Board[FromSqr] = 0;
-              Board[ToSqr]   = Piece&31;               /* do move, strip virgin-bit*/
-              if(!(RookSqr&0x88))
-              { Board[SkipSqr] = Side+6;               /* castling: put Rook       */
-                Score += 30;                           /*                 & score  */
-              }
-
-              if(PieceType<3)                          /* pawns:                   */
-              { Score -=                               /* structure, undefended    */
-                9*(((FromSqr-2)&M||Board[FromSqr-2]!=Piece) + /* squares plus bias */
-                   ((FromSqr+2)&M||Board[FromSqr+2]!=Piece) - 1);
-                if(ToSqr+StepVec+1&S)
-                { Board[ToSqr] |= 7;                   /* promote Pawn to Queen,   */
-                  i += C;                              /*                add score */
-              } }
-
-              Score = -Search(                         /* recursive eval. of reply */
-                              24-Side,                 /* opponent color           */
-                             -Beta-(Beta>Eval),        /* new Alpha (delayed gain!)*/
-                              BestScore>Alpha ? -BestScore : -Alpha,  /* New Beta  */
-                             -Eval-Score-i,            /* New Eval                 */
-                              HashKeyLo+J(0),          /* New HashKeys             */
-                              HashKeyHi+J(8)+SkipSqr-S,/* SkipSqr-S!=0 on castling */
-                              SkipSqr, ToSqr, h);      /* New epSqr, LastTo, Depth */
-
-              Score -= Score>Eval;                     /* delayed-gain penalty     */
-
-              /* If the Search routine was called as move-legality checker, we     */
-              /* now return before unmaking the move if it was the input move.     */
-              if(LastTo==9)                            /* called as move-legality  */
-                                                       /*   checker                */
-              { if(Score!=-INF & FromSqr==InputFrom & ToSqr==InputTo)/* move found */
-                { RootEval = -Eval-i;                  /* update eval, material    */
-                  Rootep   = SkipSqr;
-                  return Beta;                         /*   & not in check, signal */
-                }
-                Score = BestScore;                     /* (prevent fail-lows on    */
-              }                                        /*   K-capt. replies)       */
-
-              /* UnMake move                                                       */
-              Board[RookSqr] = Side+38;                /* undo move,RookSqr can be */
-              Board[SkipSqr] = Board[ToSqr] = 0;       /*                    dummy */
-              Board[FromSqr] = Piece;
-              Board[CaptSqr] = Victim;
-
-              /* Process score. If the move just searched was a previous best      */
-              /* move that was tried first, we take its Score and redo the first   */
-              /* ray of this piece. Otherwise update best score and move.          */
-              if(BestTo&8)                            /* Move just done was in-    */
-              { BestScore = Score;                    /*     serted previous best  */
-                BestTo   &= ~8;
-                goto replay;
-              }                                       /* redo original first move  */
-
-              if(Score>BestScore)
-              { BestScore = Score;                    /* update max,               */
-                BestFrom  = FromSqr;                  /* best move,                */
-                BestTo    = ToSqr | S&RookSqr;        /* mark non-castling with S  */
-            } }
-
-            /* Determine if we have to continue scanning this ray. We must stop    */
-            /* on a capture, or if the piece is a non-slider, with the exceptions  */
-            /* of double moves for Pawns and King (castlings!). Such double moves  */
-            /* cause setting of the SkipSqr, that otherwise is equal to the dummy S*/
-            Victim += PieceType<5;                    /* fake capt. for nonsliding */
-            if(PieceType<3&6*Side+(ToSqr&0x70)==S     /* pawn on 3rd/6th, or       */
-                ||(Piece&~24)==36 &                   /* virgin K,                 */
-                   j==7 &&                            /* moving sideways,          */
-                   RookSqr&0x88 &&                    /* RookSqr not yet set       */
-                   Board[RookSqr=(FromSqr|7)-(StepVec>>1&7)]&32 &&
-                                                      /* virgin Rook in corner     */
-                   !(Board[RookSqr^1]|Board[RookSqr^2]) /* 2 empty sqrs. next to R */
-              ) { SkipSqr = ToSqr; Victim--; }        /* unfake capt., enable e.p. */
-
-            /* continue ray scan if move was non-capture                           */
-          } while(!Victim);                           /* if not capt. continue ray */
-
-    } } } while((FromSqr=FromSqr+9&~0x88)-StartSqr);  /* next sqr. of board, wrap  */
-
-    /* All moves have been searched; wrap up iteration by testing for check- or    */
-    /* stalemate, which leave Score at -INF. Call Search with Depth=1 after null   */
-    /* move to determine if we are in check. Finally store result in hash.         */
-cutoff:
-    if(BestScore>INF/4 | BestScore<-INF/4)
-      IterDepth=99;                                   /* mate is indep. of depth   */
-    BestScore = BestScore+INF ? BestScore :           /* best loses K: (stale)mate */
-               -Search(24-Side, -INF, INF, 0, HashKeyLo, HashKeyHi, S, LastTo, 1)/2;
-
-    if(!Hash->Key | (Hash->From&M)!=M | Hash->Draft<=IterDepth)
-                                                      /* if new/better type/depth: */
-    { Hash->Key    = HashKeyHi;                       /* store in hash,            */
-      Hash->Score  = BestScore;
-      Hash->Draft  = IterDepth;
-      HashTab->Key = 0;                               /* dummy stays empty         */
-      Hash->From   = BestFrom |                       /* From & bound type         */
-                     8*(BestScore>Alpha) |            /*    encoded in X S,8 bits  */
-                     S*(BestScore<Beta);              /* (8=lower, S=upper bound)  */
-      Hash->To     = BestTo;
-    }
-
-    /* End of iteration. Start new one if more depth was requested                 */
-    /*  if(LastTo==8)printf("%2d ply, %9d searched, %6d by (%2x,%2x)\n",
-                                IterDepth-1,Nodes,BestScore,BestFrom,BestTo&0x77); */
+ q--;                                          /* adj. window: delay bonus */
+ k^=24;                                        /* change sides             */
+ d=Y=0;                                        /* start iter. from scratch */
+ X=myrand()&~M;                                /* start at random field    */
+ while(d++<n||d<3||                            /* iterative deepening loop */
+   z&K==I&&(N<T&d<98||                         /* root: deepen upto time   */
+   (K=X,L=Y&~M,d=3)))                          /* time's up: go do best    */
+ {x=B=X;                                       /* start scan at prev. best */
+  h=Y&S;                                       /* request try noncastl. 1st*/
+  P=d<3?I:D(-l,1-l,-e,S,0,d-3);                /* Search null move         */
+  m=-P<l|R>35?d>2?-I:e:-P;                     /* Prune or stand-pat       */
+  ++N;                                         /* node count (for timing)  */
+  do{u=b[x];                                   /* scan board looking for   */
+   if(u&k)                                     /*  own piece (inefficient!)*/
+   {r=p=u&7;                                   /* p = piece type (set r>0) */
+    j=o[p+16];                                 /* first step vector f.piece*/
+    while(r=p>2&r<0?-r:-o[++j])                /* loop over directions o[] */
+    {A:                                        /* resume normal after best */
+     y=x;F=G=S;                                /* (x,y)=move, (F,G)=castl.R*/
+     do{                                       /* y traverses ray, or:     */
+      H=y=h?Y^h:y+r;                           /* sneak in prev. best move */
+      if(y&M)break;                            /* board edge hit           */
+      m=E-S&b[E]&&y-E<2&E-y<2?I:m;             /* bad castling             */
+      if(p<3&y==E)H^=16;                       /* shift capt.sqr. H if e.p.*/
+      t=b[H];if(t&k|p<3&!(y-x&7)-!t)break;     /* capt. own, bad pawn mode */
+      i=37*w[t&7]+(t&192);                     /* value of capt. piece t   */
+      m=i<0?I:m;                               /* K capture                */
+      if(m>=l&d>1)goto C;                      /* abort on fail high       */
+      v=d-1?e:i-p;                             /* MVV/LVA scoring          */
+      if(d-!t>1)                               /* remaining depth          */
+      {v=p<6?b[x+8]-b[y+8]:0;                  /* center positional pts.   */
+       b[G]=b[H]=b[x]=0;b[y]=u|32;             /* do move, set non-virgin  */
+       if(!(G&M))b[F]=k+6,v+=50;               /* castling: put R & score  */
+       v-=p-4|R>29?0:20;                       /* penalize mid-game K move */
+       if(p<3)                                 /* pawns:                   */
+       {v-=9*((x-2&M||b[x-2]-u)+               /* structure, undefended    */
+              (x+2&M||b[x+2]-u)-1              /*        squares plus bias */
+             +(b[x^16]==k+36))                 /* kling to non-virgin King */
+             -(R>>2);                          /* end-game Pawn-push bonus */
+        V=y+r+1&S?647-p:2*(u&y+16&32);         /* promotion or 6/7th bonus */
+        b[y]+=V;i+=V;                          /* change piece, add score  */
+       }
+       v+=e+i;V=m>q?m:q;                       /* new eval and alpha       */
+       C=d-1-(d>5&p>2&!t&!h);
+       C=R>29|d<3|P-I?C:d;                     /* extend 1 ply if in check */
+       do
+        s=C>2|v>V?-D(-l,-V,-v,                 /* recursive eval. of reply */
+                              F,0,C):v;        /* or fail low if futile    */
+       while(s>q&++C<d);v=s;
+       if(z&&K-I&&v+I&&x==K&y==L)              /* move pending & in root:  */
+       {Q=-e-i;O=F;                            /*   exit if legal & found  */
+        R+=i>>7;--Z;return l;                  /* captured non-P material  */
+       }
+       b[G]=k+6;b[F]=b[y]=0;b[x]=u;b[H]=t;     /* undo move,G can be dummy */
+      }
+      if(v>m)                                  /* new best, update max,best*/
+       m=v,X=x,Y=y|S&F;                        /* mark double move with S  */
+      if(h){h=0;goto A;}                       /* redo after doing old best*/
+      if(x+r-y|u&32|                           /* not 1st step,moved before*/
+         p>2&(p-4|j-7||                        /* no P & no lateral K move,*/
+         b[G=x+3^r>>1&7]-k-6                   /* no virgin R in corner G, */
+         ||b[G^1]|b[G^2])                      /* no 2 empty sq. next to R */
+        )t+=p<5;                               /* fake capt. for nonsliding*/
+      else F=y;                                /* enable e.p.              */
+     }while(!t);                               /* if not capt. continue ray*/
+  }}}while((x=x+9&~M)-B);                      /* next sqr. of board, wrap */
+C:if(m>I-M|m<M-I)d=98;                         /* mate holds to any depth  */
+  m=m+I|P==I?m:0;                              /* best loses K: (stale)mate*/
+  if(z&&d>2)
+   {*c='a'+(X&7);c[1]='8'-(X>>4);c[2]='a'+(Y&7);c[3]='8'-(Y>>4&7);c[4]=0;
+    breakpoint=2;         					  /* AVR Studio 4 Breakpoint for moves, watch c[] */
+#ifdef VERBOSE
+//    printf("%2d ply, %9d searched, score=%6d by %c%c%c%c\n",d-1,N-S,m,
+//     'a'+(X&7),'8'-(X>>4),'a'+(Y&7),'8'-(Y>>4&7)); /* uncomment for Kibitz */
+#endif
   }
+ }                                             /* encoded in X S,8 bits    */
+ k^=24;                                        /* change sides back        */
+ --Z;return m+=m<e;                            /* delayed-loss bonus       */
+}
 
-  /* return best score (and in root also best move) after all iterations are done. */
-  if(LastTo&8)
-  { InputFrom = BestFrom;
-    InputTo   = BestTo & ~0x88;
-  }
-  return BestScore;
+void print_board()
+{
+ short N=-1;
+ myputs("\n\n\r");
+ while(++N<121)
+ {
+  myputchar(N&8&&(N+7)?'\r':' ');           	/* Return & spacer for better viewing */
+  myputchar(N&8&&(N+=7)?'\n':".?+nkbrq?*?NKBRQ"[b[N]&15]);
+ }
 }
 
 int main(void)
 {
- unsigned char serial_in=0;
- init_UART_FTDI_EDUCIAA();
- sendString_UART_USB_EDUCIAA("\n\n\r EDU-CIAA  Chess\n\r",21);
+#ifdef EDUCIAA
+ init_UART_FTDI_EDUCIAA();									/* Inicialización UART_FTDI y */
+ myputs("\n\n\r");
+ myputs("  EDUCIAA Chess");									/* mensaje de bienvenida      */
+#endif
 
- int j, Side=8, *ptr, InBuf[9];                            /* 8=white, 16=black  */
+#ifdef UNIX
+ mysrand(time(NULL));  					                    /* make myrand() calls random */
+#endif
 
- /* Initialize board and piece-square table (actually just a square table).      */
- for(i=0;i<8;i++)                                          /* initial board setup*/
- {Board[i] = (Board[i+0x70] = StepVecs[i+24]+40)+8;        /* Pieces             */
-  Board[i+0x10] = 18; Board[i+0x60] = 9;                   /* black, white Pawns */
-  for(j=0;j<8;j++) Board[16*j+i+8]=(i-4)*(i-4)+(j-3.5)*(j-3.5);
-                                                           /*common pce-sqr table*/
- }                                                         /*(in unused half b[])*/
- for(i=0x88; i<1035; i++) Zobrist[i]=rand()>>9;
- while(1)                                                  /* play loop          */
- {for(i=0;i<121;i++)
-//printf(" %c", i&8&&(i+=7) ? '\n' : Sym[Board[i]&15]);    /* print board        */
-   	 {
-	 writeByte_UART_USB_EDUCIAA(i&8&&(i+7)?'\r':' ');
-	 writeByte_UART_USB_EDUCIAA(i&8&&(i+=7)?'\n':Sym[Board[i]&15]);
- 	 }
- sendString_UART_USB_EDUCIAA(" Tu jugada: ",12);								   /* Invita a jugar     */
-  ptr = InBuf; //while((*ptr++ = getchar()) > '\n');       /* read input line    */
-  do
-  	   {
-	   serial_in=readByte_UART_USB_EDUCIAA();
-	   if (serial_in!=0)
-	   	   {
-		   if (serial_in==13) serial_in=10;
-		   (*ptr++=serial_in);
-		   writeByte_UART_USB_EDUCIAA(serial_in);
-	   	   }
-  	   }
-  while(serial_in!=10);
-  sendString_UART_USB_EDUCIAA("\n\r",2);                                        /* Separa tableros    */
-  Nodes=0;
-  if(*InBuf-'\n')
-  {InputFrom=InBuf[0]-16*InBuf[1]+C;                       /* parse entered move */
-   InputTo  =InBuf[2]-16*InBuf[3]+C;
-  }
-  for(i=0;i<HASHSIZE;i++)HashTab[i].Key=0;                 /* clear hash table   */
-  if(Search(Side,-INF,INF,RootEval,1,1,Rootep,9,2)==INF)
-  {Side^=24;                                               /* check legality & do*/
-  for(i=0;i<121;i++)
-//printf(" %c", i&8&&(i+=7) ? '\n' : Sym[Board[i]&15]);    /* print board        */
-     {
- 	 writeByte_UART_USB_EDUCIAA(i&8&&(i+7)?'\r':' ');
- 	 writeByte_UART_USB_EDUCIAA(i&8&&(i+=7)?'\n':Sym[Board[i]&15]);
-  	 }
-  sendString_UART_USB_EDUCIAA(" Pensando.. ",12);
-  Search(Side,-INF,INF,RootEval,1,1,Rootep,8,0);           /* think up one       */
-  for(i=0;i<HASHSIZE;i++)HashTab[i].Key=0;                 /* clear hash table   */
-  if(Search(Side,-INF,INF,RootEval,1,1,Rootep,9,2)==INF)
-	  Side^=24;                                            /* check legality & do*/
-
-  writeByte_UART_USB_EDUCIAA('a'+InputFrom%16);
-  writeByte_UART_USB_EDUCIAA('8'-InputFrom/16);
-  writeByte_UART_USB_EDUCIAA('a'+InputTo%16);
-  writeByte_UART_USB_EDUCIAA('8'-InputTo/16);
-
-  writeByte_UART_USB_EDUCIAA(0xa);
-  writeByte_UART_USB_EDUCIAA(0xa);
-  writeByte_UART_USB_EDUCIAA(0xd);
-  }
+ do{                    									/* play loop                  */
+ #ifdef VERBOSE
+  print_board();
+ #endif
+ p=c;
+ if (k==WHITE){												/* Juegan las Blancas: Humano  */
+	  if (k==last_side) myputs("Movimiento ilegal!\n\r");	/* Si no hubo cambio de lado   */
+	  myputs("Tu turno:   ");
+	  while((*p++=mygetchar())>ENTERKEY);                   /* read input line for whites  */
  }
- return 0;
+ else *c=ENTERKEY;											/* force CPU to move blacks    */
+ K=I;                                                      /* invalid move       */
+ if(*c-ENTERKEY)
+ {
+	  K=*c-16*c[1]+799,L=c[2]-16*c[3]+799;      			/* parse entered move */
+//	  myputs("\n\r");
+ }
+ else myputs("Pensando...");
+ N=0;T=STRENGTH;                                             /* T=Computer Play strength */
+ last_side=k;
+ }while(D(-I,I,Q,O,1,3)>-I+1);                              /* think or check & do*/
+#ifdef UNIX
+ print_board();
+#endif
 }
