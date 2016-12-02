@@ -52,7 +52,8 @@
  * ---------------------------
  *
  */
-
+extern void NMI_Handler(void);						// Parece que estas funciones tienen que ser visibles desde la aplicacion, como estan en vector_m0.c
+extern void HardFault_Handler(void);				// puse estos extern aqui y en vector_m0.c quite los static.
 /*
  * modification history (new versions first)
  * -----------------------------------------------------------
@@ -323,10 +324,4 @@ while(temp>-I+1)
  }
 sendString_UART_USB_EDUCIAA("FIN DE JUEGO: M0",20);
 while(1);
-}
-
-
-static void NMI_Handler(void) {
-    while (1) {
-    }
 }

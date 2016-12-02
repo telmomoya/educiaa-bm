@@ -63,18 +63,15 @@
 
 /*==================[internal functions declaration]=========================*/
 /** \brief Handler for NMI */
-static void NMI_Handler(void);
+void NMI_Handler(void);
 
 /** \brief Handler for HardFault */
-static void HardFault_Handler(void);
+void HardFault_Handler(void);
 
 /** \brief Handler for SVC */
 static void SVC_Handler(void);
 
-/** \brief Handler for Debug Monitor */
-static void DebugMon_Handler(void);
-
-/** \brief Dummy empty ISR Handler */
+/** \brief Handler for NoHandler */
 static void ISR_NoHandler(void);
 
 
@@ -142,14 +139,16 @@ void (* const g_pfnVectors[])(void) = {
 
 /*==================[internal functions definition]==========================*/
 /* Default exception handlers. */
+
 __attribute__ ((section(".after_vectors")))
-static void NMI_Handler(void) {
+void NMI_Handler(void) {
     while (1) {
     }
 }
 
+
 __attribute__ ((section(".after_vectors")))
-static void HardFault_Handler(void) {
+void HardFault_Handler(void) {
     while (1) {
     }
 }
@@ -160,17 +159,14 @@ static void SVC_Handler(void) {
     }
 }
 
-__attribute__ ((section(".after_vectors")))
-void DebugMon_Handler(void) {
-    while (1) {
-    }
-}
 
 __attribute__ ((section(".after_vectors")))
 static void ISR_NoHandler(void) {
-    while (1) {
+   while (1) {
     }
 }
+
+
 
 /*==================[external functions definition]==========================*/
 
